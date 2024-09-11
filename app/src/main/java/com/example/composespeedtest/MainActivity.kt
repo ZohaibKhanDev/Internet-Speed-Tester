@@ -1,4 +1,4 @@
-package com.juraj.composespeedtest
+package com.example.composespeedtest
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -6,7 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material.Surface
 import androidx.compose.ui.Modifier
-import com.juraj.composespeedtest.ui.theme.ComposeSpeedTestTheme
+import com.example.composespeedtest.ui.theme.ComposeSpeedTestTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

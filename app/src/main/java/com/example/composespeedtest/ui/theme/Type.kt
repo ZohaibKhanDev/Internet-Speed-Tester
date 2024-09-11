@@ -1,4 +1,4 @@
-package com.juraj.composespeedtest.ui.theme
+package com.example.composespeedtest.ui.theme
 
 import androidx.compose.material.Typography
 import androidx.compose.ui.graphics.Color

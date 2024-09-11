@@ -1,4 +1,4 @@
-package com.juraj.composespeedtest
+package com.example.composespeedtest
 
 data class UiState(
     val arcValue: Float = 0f,

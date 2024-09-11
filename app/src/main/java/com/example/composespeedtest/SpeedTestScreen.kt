@@ -1,4 +1,4 @@
-package com.juraj.composespeedtest
+package com.example.composespeedtest
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
@@ -48,14 +48,14 @@ import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.juraj.composespeedtest.ui.theme.ComposeSpeedTestTheme
-import com.juraj.composespeedtest.ui.theme.DarkColor
-import com.juraj.composespeedtest.ui.theme.DarkGradient
-import com.juraj.composespeedtest.ui.theme.Green200
-import com.juraj.composespeedtest.ui.theme.Green500
-import com.juraj.composespeedtest.ui.theme.GreenGradient
-import com.juraj.composespeedtest.ui.theme.LightColor
-import com.juraj.composespeedtest.ui.theme.Pink
+import com.example.composespeedtest.ui.theme.ComposeSpeedTestTheme
+import com.example.composespeedtest.ui.theme.DarkColor
+import com.example.composespeedtest.ui.theme.DarkGradient
+import com.example.composespeedtest.ui.theme.Green200
+import com.example.composespeedtest.ui.theme.Green500
+import com.example.composespeedtest.ui.theme.GreenGradient
+import com.example.composespeedtest.ui.theme.LightColor
+import com.example.composespeedtest.ui.theme.Pink
 import kotlinx.coroutines.launch
 import java.lang.Float.max
 import kotlin.math.floor
@@ -78,7 +78,7 @@ suspend fun startAnimation(animation: Animatable<Float, AnimationVector1D>) {
 fun Animatable<Float, AnimationVector1D>.toUiState(maxSpeed: Float) = UiState(
     arcValue = value,
     speed = "%.1f".format(value * 100),
-    ping = if (value > 0.2f) "${(value * 15).roundToInt()} ms" else "-",
+    ping = if (value > 0.2f) "${(value * 10).roundToInt()} ms" else "-",
     maxSpeed = if (maxSpeed > 0f) "%.1f mbps".format(maxSpeed) else "-",
     inProgress = isRunning
 )
