@@ -17,5 +17,5 @@ Let's chat about potential projects, job opportunities, or any other collaborati
 ## Screen Shots
 | ![Screenshot 1](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/1.png) | ![Screenshot 2](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/2.png) | ![Screenshot 3](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/3.png) |
 | --- | --- | --- |
-| ![Screenshot 4](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/4.png) | ![Screenshot 5](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/5.png)
+| ![Screenshot 4](https://github.com/ZohaibKhanDev/Internet-Speed-Tester/blob/master/screenshots/4.png) 
 
