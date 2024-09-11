@@ -2,11 +2,8 @@
 ## Overview
 
 ## 🚀 Key Features
-- **  **
-- **  ** 
-- **  **
-- **  **
-- **  **
+- ** Real-time Speed Testing **
+- ** Detailed Results ** 
 
 ## 🤝 Connect with Me
 Let's chat about potential projects, job opportunities, or any other collaboration! Feel free to connect with me through the following channels:
