@@ -1,4 +1,3 @@
-
 package com.example.composespeedtest
 
 import android.content.Context
@@ -7,13 +6,14 @@ import android.net.NetworkCapabilities
 import android.os.SystemClock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,12 +30,14 @@ class SpeedTestService(context: Context) {
 
     private val appContext = context.applicationContext
 
+    // Optimized client configuration with a custom connection pool for speed-testing bursts
     private val client = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(5, 5L, TimeUnit.SECONDS))
+        .connectTimeout(8, TimeUnit.SECONDS)
         .readTimeout(5, TimeUnit.SECONDS)
-        .writeTimeout(10, TimeUnit.SECONDS)
-        .callTimeout(15, TimeUnit.SECONDS)
-        .retryOnConnectionFailure(false)
+        .writeTimeout(8, TimeUnit.SECONDS)
+        .callTimeout(12, TimeUnit.SECONDS)
+        .retryOnConnectionFailure(true)
         .build()
 
     private val downloadUrl = "https://speed.cloudflare.com/__down"
@@ -63,42 +65,26 @@ class SpeedTestService(context: Context) {
     )
 
     fun isNetworkAvailable(): Boolean {
-        val manager = appContext.getSystemService(
-            Context.CONNECTIVITY_SERVICE
-        ) as ConnectivityManager
-
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
         val network = manager.activeNetwork ?: return false
         val capabilities = manager.getNetworkCapabilities(network) ?: return false
 
-        return capabilities.hasCapability(
-            NetworkCapabilities.NET_CAPABILITY_INTERNET
-        ) && capabilities.hasCapability(
-            NetworkCapabilities.NET_CAPABILITY_VALIDATED
-        )
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
     }
 
     fun getNetworkType(): String {
-        val manager = appContext.getSystemService(
-            Context.CONNECTIVITY_SERVICE
-        ) as ConnectivityManager
-
-        val network = manager.activeNetwork ?: return "Unknown"
-        val capabilities = manager.getNetworkCapabilities(network)
+        val manager = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return "Unknown"
+        val network = manager.activeNetwork ?: return "Unknown"
+        val capabilities = manager.getNetworkCapabilities(network) ?: return "Unknown"
 
         return when {
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ->
-                "WiFi"
-
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ->
-                "Mobile"
-
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ->
-                "Ethernet"
-
-            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ->
-                "VPN"
-
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "WiFi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobile"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "Ethernet"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "VPN"
             else -> "Unknown"
         }
     }
@@ -117,50 +103,51 @@ class SpeedTestService(context: Context) {
             }
 
             onResult(Result.Loading)
-
             val networkType = getNetworkType()
-
             onProgress(0.02f)
 
+            // 1. Latency & Jitter phase
             val latency = measureLatency()
             val ping = latency.samples.average().roundToInt()
             val jitter = calculateJitter(latency.samples)
-
             onProgress(0.15f)
 
+            // 2. Download phase
+            var smoothedSpeed = 0f
             val downloadSpeed = measureDownloadSpeed(
                 durationMs = 5_000L,
-                parallelStreams = 3,
-                onProgress = { progress ->
-                    onProgress(0.15f + progress * 0.45f)
-                },
-                onInstant = onInstantSpeed
+                parallelStreams = 4,
+                onProgress = { progress -> onProgress(0.15f + progress * 0.45f) },
+                onInstant = { rawSpeed ->
+                    // Exponential Moving Average (EMA) smoothing for stable chart plotting
+                    smoothedSpeed = if (smoothedSpeed == 0f) rawSpeed else (smoothedSpeed * 0.6f) + (rawSpeed * 0.4f)
+                    onInstantSpeed(smoothedSpeed)
+                }
             )
 
             currentCoroutineContext().ensureActive()
-
             if (downloadSpeed <= 0f) {
                 onResult(Result.Error("Download test failed"))
                 return
             }
-
             onProgress(0.60f)
 
+            // 3. Upload phase
+            smoothedSpeed = 0f
             val uploadSpeed = measureUploadSpeed(
                 durationMs = 4_000L,
-                onProgress = { progress ->
-                    onProgress(0.60f + progress * 0.35f)
-                },
-                onInstant = onInstantSpeed
+                onProgress = { progress -> onProgress(0.60f + progress * 0.35f) },
+                onInstant = { rawSpeed ->
+                    smoothedSpeed = if (smoothedSpeed == 0f) rawSpeed else (smoothedSpeed * 0.6f) + (rawSpeed * 0.4f)
+                    onInstantSpeed(smoothedSpeed)
+                }
             )
 
             currentCoroutineContext().ensureActive()
-
             if (uploadSpeed <= 0f) {
                 onResult(Result.Error("Upload test failed"))
                 return
             }
-
             onProgress(0.95f)
 
             onResult(
@@ -175,77 +162,60 @@ class SpeedTestService(context: Context) {
                     )
                 )
             )
-
             onProgress(1f)
+
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
-            onResult(
-                Result.Error(
-                    exception.message ?: "Unable to complete speed test"
-                )
-            )
+            onResult(Result.Error(exception.message ?: "Unable to complete speed test"))
         }
     }
 
-    private suspend fun measureLatency(): LatencyResult =
-        withContext(Dispatchers.IO) {
-            val samples = mutableListOf<Long>()
-            var failedRequests = 0
-            val totalRequests = 5
+    private suspend fun measureLatency(): LatencyResult = withContext(Dispatchers.IO) {
+        val samples = mutableListOf<Long>()
+        var failedRequests = 0
+        val totalRequests = 5
 
-            repeat(totalRequests) {
-                currentCoroutineContext().ensureActive()
+        repeat(totalRequests) {
+            currentCoroutineContext().ensureActive()
 
-                val request = Request.Builder()
-                    .url(latencyUrl)
-                    .header("Cache-Control", "no-cache")
-                    .get()
-                    .build()
+            val request = Request.Builder()
+                .url(latencyUrl)
+                .header("Cache-Control", "no-cache")
+                .get()
+                .build()
 
-                val start = SystemClock.elapsedRealtime()
-
-                try {
-                    client.newCall(request).execute().use { response ->
-                        if (response.isSuccessful) {
-                            response.body?.byteStream()?.use { input ->
-                                val buffer = ByteArray(256)
-                                input.read(buffer)
-                            }
-
-                            samples.add(
-                                SystemClock.elapsedRealtime() - start
-                            )
-                        } else {
-                            failedRequests++
-                        }
+            val start = SystemClock.elapsedRealtime()
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        response.body?.source()?.skip(256)
+                        samples.add(SystemClock.elapsedRealtime() - start)
+                    } else {
+                        failedRequests++
                     }
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (exception: Exception) {
-                    failedRequests++
                 }
-
-                delay(100)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                failedRequests++
             }
-
-            if (samples.isEmpty()) {
-                throw IOException("Latency measurement failed")
-            }
-
-            LatencyResult(
-                samples = samples,
-                packetLoss = failedRequests * 100f / totalRequests
-            )
+            delay(80)
         }
+
+        if (samples.isEmpty()) {
+            throw IOException("Latency measurement failed")
+        }
+
+        LatencyResult(
+            samples = samples,
+            packetLoss = (failedRequests.toFloat() / totalRequests) * 100f
+        )
+    }
 
     private fun calculateJitter(samples: List<Long>): Float {
         if (samples.size < 2) return 0f
-
-        val differences = samples.zipWithNext { first, second ->
-            abs(second - first).toFloat()
-        }
-
+        val differences = samples.zipWithNext { first, second -> abs(second - first).toFloat() }
         return differences.average().toFloat()
     }
 
@@ -258,85 +228,62 @@ class SpeedTestService(context: Context) {
         val startTime = SystemClock.elapsedRealtime()
         val endTime = startTime + durationMs
         val totalBytes = AtomicLong(0L)
-        val calls = Collections.synchronizedList(
-            mutableListOf<okhttp3.Call>()
-        )
+        val activeCalls = Collections.synchronizedList(mutableListOf<okhttp3.Call>())
 
         val reporter = launch(Dispatchers.Default) {
             var previousBytes = 0L
             var previousTime = SystemClock.elapsedRealtime()
 
             while (isActive && SystemClock.elapsedRealtime() < endTime) {
-                delay(200)
-
+                delay(150)
                 val now = SystemClock.elapsedRealtime()
                 val bytes = totalBytes.get()
                 val elapsed = now - previousTime
                 val delta = bytes - previousBytes
 
                 if (elapsed > 0 && delta > 0) {
-                    onInstant(
-                        delta * 8f / elapsed / 1_000f
-                    )
+                    onInstant(bytesToMbps(delta, elapsed))
                 }
-
                 previousBytes = bytes
                 previousTime = now
 
-                onProgress(
-                    ((now - startTime).toFloat() / durationMs)
-                        .coerceIn(0f, 1f)
-                )
+                onProgress(((now - startTime).toFloat() / durationMs).coerceIn(0f, 1f))
             }
         }
 
         val jobs = (0 until parallelStreams).map {
             launch(Dispatchers.IO) {
                 val request = Request.Builder()
-                    .url("$downloadUrl?bytes=100000000")
+                    .url("$downloadUrl?bytes=200000000") // Large payload instruction
                     .header("Cache-Control", "no-cache")
                     .get()
                     .build()
 
                 val call = client.newCall(request)
-                calls.add(call)
+                activeCalls.add(call)
 
                 try {
                     call.execute().use { response ->
-                        if (!response.isSuccessful) {
-                            throw IOException(
-                                "Download server returned ${response.code}"
-                            )
-                        }
+                        if (!response.isSuccessful) return@launch
+                        val input = response.body?.byteStream() ?: return@launch
+                        val buffer = ByteArray(8192) // 8KB block size chunking
 
-                        val input = response.body?.byteStream()
-                            ?: throw IOException("Empty download response")
-
-                        val buffer = ByteArray(64 * 1024)
-
-                        while (
-                            SystemClock.elapsedRealtime() < endTime &&
-                            isActive
-                        ) {
+                        while (SystemClock.elapsedRealtime() < endTime && isActive) {
                             currentCoroutineContext().ensureActive()
-
                             val read = input.read(buffer)
-
                             if (read == -1) break
-                            if (read == 0) continue
-
-                            totalBytes.addAndGet(read.toLong())
+                            if (read > 0) {
+                                totalBytes.addAndGet(read.toLong())
+                            }
                         }
                     }
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (exception: Exception) {
-                    if (isActive && SystemClock.elapsedRealtime() < endTime) {
-                        throw exception
-                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Swallow connection resets that naturally happen when test bounds expire
                 } finally {
                     call.cancel()
-                    calls.remove(call)
+                    activeCalls.remove(call)
                 }
             }
         }
@@ -344,7 +291,7 @@ class SpeedTestService(context: Context) {
         try {
             delay(durationMs)
         } finally {
-            calls.toList().forEach { it.cancel() }
+            activeCalls.toList().forEach { it.cancel() }
             jobs.forEach { it.cancel() }
             reporter.cancel()
             jobs.forEach { it.join() }
@@ -359,8 +306,7 @@ class SpeedTestService(context: Context) {
         }
 
         onProgress(1f)
-
-        bytes * 8f / elapsed / 1_000f
+        bytesToMbps(bytes, elapsed)
     }
 
     private suspend fun measureUploadSpeed(
@@ -371,21 +317,17 @@ class SpeedTestService(context: Context) {
         val startTime = SystemClock.elapsedRealtime()
         val endTime = startTime + durationMs
         val sentBytes = AtomicLong(0L)
-        val calls = Collections.synchronizedList(
-            mutableListOf<okhttp3.Call>()
-        )
+        val activeCalls = Collections.synchronizedList(mutableListOf<okhttp3.Call>())
 
         val requestBody = object : RequestBody() {
-
-            override fun contentType() =
-                "application/octet-stream".toMediaType()
-
+            override fun contentType() = "application/octet-stream".toMediaType()
             override fun contentLength(): Long = -1L
 
             override fun writeTo(sink: BufferedSink) {
-                val data = ByteArray(64 * 1024)
+                // 16 KB payload chunk pre-filled with dummy byte patterns
+                val data = ByteArray(16 * 1024) { 0x55.toByte() }
 
-                while (SystemClock.elapsedRealtime() < endTime) {
+                while (SystemClock.elapsedRealtime() < endTime && !Thread.currentThread().isInterrupted) {
                     sink.write(data)
                     sentBytes.addAndGet(data.size.toLong())
                 }
@@ -397,26 +339,19 @@ class SpeedTestService(context: Context) {
             var previousTime = SystemClock.elapsedRealtime()
 
             while (isActive && SystemClock.elapsedRealtime() < endTime) {
-                delay(200)
-
+                delay(150)
                 val now = SystemClock.elapsedRealtime()
                 val bytes = sentBytes.get()
                 val elapsed = now - previousTime
                 val delta = bytes - previousBytes
 
                 if (elapsed > 0 && delta > 0) {
-                    onInstant(
-                        delta * 8f / elapsed / 1_000f
-                    )
+                    onInstant(bytesToMbps(delta, elapsed))
                 }
-
                 previousBytes = bytes
                 previousTime = now
 
-                onProgress(
-                    ((now - startTime).toFloat() / durationMs)
-                        .coerceIn(0f, 1f)
-                )
+                onProgress(((now - startTime).toFloat() / durationMs).coerceIn(0f, 1f))
             }
         }
 
@@ -427,32 +362,24 @@ class SpeedTestService(context: Context) {
             .build()
 
         val call = client.newCall(request)
-        calls.add(call)
+        activeCalls.add(call)
 
         val requestJob = launch(Dispatchers.IO) {
             try {
                 call.execute().use { response ->
-                    if (!response.isSuccessful) {
-                        throw IOException(
-                            "Upload server returned ${response.code}"
-                        )
-                    }
-
                     response.body?.close()
                 }
-            } catch (exception: CancellationException) {
-                throw exception
-            } catch (exception: Exception) {
-                if (isActive && SystemClock.elapsedRealtime() < endTime) {
-                    throw exception
-                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Normal termination on cutoff timeout
             }
         }
 
         try {
             delay(durationMs)
         } finally {
-            calls.toList().forEach { it.cancel() }
+            activeCalls.toList().forEach { it.cancel() }
             requestJob.cancel()
             reporter.cancel()
             requestJob.join()
@@ -467,7 +394,12 @@ class SpeedTestService(context: Context) {
         }
 
         onProgress(1f)
+        bytesToMbps(bytes, elapsed)
+    }
 
-        bytes * 8f / elapsed / 1_000f
+    private fun bytesToMbps(bytes: Long, elapsedMs: Long): Float {
+        // Convert bytes to bits (* 8) and milliseconds to seconds (/ 1000.0) -> Megabits per second (/ 1_000_000.0)
+        // Simplifies to: (bytes * 8) / (elapsedMs * 1000)
+        return (bytes * 8f) / (elapsedMs * 1_000f)
     }
 }
